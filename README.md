@@ -5,7 +5,6 @@ An AI-powered web application for real-time detection and analysis of camouflage
 ![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-14-black.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109-green.svg)
-![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 ## ✨ Features
 
@@ -113,10 +112,7 @@ This system benefits key defense organizations in Saudi Arabia:
 - **GAMI** (General Authority for Military Industries)  
 - **SAFCSP** (Saudi Federation for Cybersecurity, Programming and Drones)
 
-## 📝 License
-
-MIT License - Free to use and modify
 
 ---
 
-**Status: ✅ Production Ready** | **Version: 2.0** | **Last Updated: January 2025**
+**Status: ✅ Production Ready** | **Version: 2.0** | **Last Updated: October 2025**
