@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import dynamic from 'next/dynamic'
+import { generatePDF } from '@/utils/pdfGenerator'
 
 // Dynamically import map to avoid SSR issues
 const LocationMap = dynamic(() => import('../LocationMap'), { ssr: false })
@@ -33,9 +34,10 @@ interface DetectionModalProps {
 }
 
 export default function DetectionModal({ detection, isOpen, onClose }: DetectionModalProps) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'logs' | 'remediation'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'location' | 'images'>('overview')
   const [newStatus, setNewStatus] = useState(detection.status)
   const [newAssignee, setNewAssignee] = useState(detection.assignee)
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false)
 
   if (!isOpen) return null
 
@@ -63,10 +65,122 @@ export default function DetectionModal({ detection, isOpen, onClose }: Detection
     onClose()
   }
 
+  const urlToBase64ViaBackend = async (url: string): Promise<string> => {
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      console.log(`Requesting image from backend: ${API_URL}/api/fetch-image-base64`)
+      
+      const response = await fetch(`${API_URL}/api/fetch-image-base64?url=${encodeURIComponent(url)}`)
+      
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
+      }
+      
+      const data = await response.json()
+      
+      if (!data.success || !data.base64) {
+        throw new Error('Invalid response from server')
+      }
+      
+      return data.base64
+    } catch (error) {
+      console.error('Error fetching image via backend:', error)
+      throw error
+    }
+  }
+
+  const handleGeneratePDF = async () => {
+    // Remember the current tab so we can switch back later
+    const previousTab = activeTab
+    
+    setIsGeneratingPDF(true)
+    
+    if (activeTab !== 'images') {
+      setActiveTab('images')
+      // Wait a bit for images to load
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+    
+    try {
+      // Get images from the DOM (they're already loaded in the modal)
+      let originalBase64 = ''
+      let segmentedBase64 = ''
+
+      console.log('Fetching images for PDF via backend proxy...')
+      
+      if (detection.image_snapshot_url) {
+        try {
+          console.log('Fetching original image via backend...')
+          originalBase64 = await urlToBase64ViaBackend(detection.image_snapshot_url)
+          console.log('Original image loaded and converted, length:', originalBase64.length)
+        } catch (error) {
+          console.error('Failed to fetch original image:', error)
+          console.warn('Warning: Could not load original image for PDF')
+        }
+      }
+
+      if (detection.segmented_image_url) {
+        try {
+          console.log('Fetching segmented image via backend...')
+          segmentedBase64 = await urlToBase64ViaBackend(detection.segmented_image_url)
+          console.log('Segmented image loaded and converted, length:', segmentedBase64.length)
+        } catch (error) {
+          console.error('Failed to fetch segmented image:', error)
+          console.warn('Warning: Could not load segmented image for PDF')
+        }
+      }
+
+      // Create summary from detection data
+      const summary = `Detected ${detection.soldier_count} soldier${detection.soldier_count > 1 ? 's' : ''} in ${detection.environment.toLowerCase()}. The personnel were wearing ${detection.attire_and_camouflage.toLowerCase()} and carrying ${detection.equipment.toLowerCase()}.`
+
+      // Convert detection event to report format
+      const report = {
+        report_id: detection.report_id,
+        timestamp: detection.timestamp,
+        location: detection.location,
+        analysis: {
+          summary: summary,
+          environment: detection.environment,
+          soldier_count: detection.soldier_count,
+          attire_and_camouflage: detection.attire_and_camouflage,
+          equipment: detection.equipment
+        },
+        images: {
+          original_base64: originalBase64,
+          masked_base64: segmentedBase64
+        }
+      }
+
+      console.log('Generating PDF with report data:', {
+        ...report,
+        images: {
+          original_base64: originalBase64 ? `${originalBase64.substring(0, 50)}... (${originalBase64.length} chars)` : 'empty',
+          masked_base64: segmentedBase64 ? `${segmentedBase64.substring(0, 50)}... (${segmentedBase64.length} chars)` : 'empty'
+        }
+      })
+
+      // Generate PDF
+      generatePDF(report)
+      
+      // Restore the original tab after a short delay
+      setTimeout(() => {
+        if (previousTab !== 'images') {
+          setActiveTab(previousTab)
+        }
+      }, 100)
+    } catch (error) {
+      console.error('Error generating PDF:', error)
+      alert('Failed to generate PDF. Please try again.')
+    } finally {
+      setIsGeneratingPDF(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
          onClick={onClose}>
-      <div className="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] overflow-hidden relative"
+      <div className="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] flex flex-col relative"
            onClick={(e) => e.stopPropagation()}>
         
         {/* Header */}
@@ -92,7 +206,7 @@ export default function DetectionModal({ detection, isOpen, onClose }: Detection
         </div>
 
         {/* Content */}
-        <div className="flex h-[calc(90vh-120px)]">
+        <div className="flex flex-1 overflow-hidden">
           {/* Left Panel - Overview */}
           <div className="w-1/3 border-r border-gray-200 p-6 overflow-y-auto">
             <div className="space-y-6">
@@ -177,10 +291,11 @@ export default function DetectionModal({ detection, isOpen, onClose }: Detection
                       onChange={(e) => setNewAssignee(e.target.value)}
                       className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     >
-                      <option value="John Doe">John Doe</option>
-                      <option value="Jane Smith">Jane Smith</option>
-                      <option value="Mike Johnson">Mike Johnson</option>
-                      <option value="Sarah Wilson">Sarah Wilson</option>
+                      <option value="Saif Alotaibi">Saif Alotaibi</option>
+                      <option value="Fatimah Alsubaie">Fatimah Alsubaie</option>
+                      <option value="Abdulrahman Attar">Abdulrahman Attar</option>
+                      <option value="Mousa Alatewi">Mousa Alatewi</option>
+                      <option value="Abdulelah Alowaid">Abdulelah Alowaid</option>
                       <option value="Unassigned">Unassigned</option>
                     </select>
                     <button
@@ -201,9 +316,9 @@ export default function DetectionModal({ detection, isOpen, onClose }: Detection
             <div className="border-b border-gray-200">
               <nav className="flex space-x-8 px-6">
                 {[
-                  { id: 'overview', label: 'Overview', icon: '📊' },
-                  { id: 'location', label: 'Location', icon: '📍' },
-                  { id: 'images', label: 'Images', icon: '📷' }
+                  { id: 'overview', label: 'Overview' },
+                  { id: 'location', label: 'Location' },
+                  { id: 'images', label: 'Images' }
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -214,7 +329,6 @@ export default function DetectionModal({ detection, isOpen, onClose }: Detection
                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                     }`}
                   >
-                    <span className="mr-2">{tab.icon}</span>
                     {tab.label}
                   </button>
                 ))}
@@ -223,42 +337,6 @@ export default function DetectionModal({ detection, isOpen, onClose }: Detection
 
             {/* Tab Content */}
             <div className="flex-1 p-6 overflow-y-auto">
-              {activeTab === 'overview' && (
-                <div className="space-y-6">
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-3">Description</h3>
-                    <p className="text-gray-700 leading-relaxed">{detection.description}</p>
-                  </div>
-
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-3">Timeline</h3>
-                    <div className="space-y-3">
-                      <div className="flex items-center">
-                        <div className="w-3 h-3 bg-blue-500 rounded-full mr-3"></div>
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">Detection Created</div>
-                          <div className="text-xs text-gray-500">{new Date(detection.timestamp).toLocaleString()}</div>
-                        </div>
-                      </div>
-                      <div className="flex items-center">
-                        <div className="w-3 h-3 bg-yellow-500 rounded-full mr-3"></div>
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">Status: {detection.status}</div>
-                          <div className="text-xs text-gray-500">Current status</div>
-                        </div>
-                      </div>
-                      <div className="flex items-center">
-                        <div className="w-3 h-3 bg-gray-300 rounded-full mr-3"></div>
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">Assigned to: {detection.assignee}</div>
-                          <div className="text-xs text-gray-500">Current assignee</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
               {activeTab === 'overview' && (
                 <div className="space-y-6">
                   <div>
@@ -272,13 +350,13 @@ export default function DetectionModal({ detection, isOpen, onClose }: Detection
                   </div>
 
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-3">Detection Timeline</h3>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-3">Timeline</h3>
                     <div className="space-y-3">
                       <div className="flex items-center">
                         <div className="w-3 h-3 bg-blue-500 rounded-full mr-3"></div>
                         <div>
                           <div className="text-sm font-medium text-gray-900">Detection Created</div>
-                          <div className="text-xs text-gray-500">{detection.timestamp}</div>
+                          <div className="text-xs text-gray-500">{new Date(detection.timestamp).toLocaleString()}</div>
                         </div>
                       </div>
                       <div className="flex items-center">
@@ -446,7 +524,7 @@ export default function DetectionModal({ detection, isOpen, onClose }: Detection
         </div>
 
         {/* Footer */}
-        <div className="border-t border-gray-200 p-6 bg-gray-50">
+        <div className="border-t border-gray-200 p-6 bg-gray-50 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="text-sm text-gray-500">
               Report ID: {detection.report_id} • Last Updated: {new Date().toLocaleString()}
@@ -459,13 +537,23 @@ export default function DetectionModal({ detection, isOpen, onClose }: Detection
                 Close
               </button>
               <button
-                onClick={() => {
-                  // Export functionality would go here
-                  console.log('Exporting detection:', detection.report_id)
-                }}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+                onClick={handleGeneratePDF}
+                disabled={isGeneratingPDF}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
-                Export Report
+                {isGeneratingPDF ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    📄 Download PDF
+                  </>
+                )}
               </button>
             </div>
           </div>

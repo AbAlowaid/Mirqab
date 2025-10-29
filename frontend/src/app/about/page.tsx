@@ -60,54 +60,6 @@ export default function AboutPage() {
           passionate about leveraging AI for advanced detection systems
         </p>
 
-        {/* Project Overview */}
-        <section className="max-w-4xl mx-auto mb-16">
-          <div className="professional-card rounded-2xl shadow-lg p-8">
-            <h2 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-6">Project Overview</h2>
-            <p className="text-lg text-gray-700 mb-4">
-              Mirqab is an advanced AI-powered detection and monitoring system developed as 
-              a capstone project representing the culmination of advanced studies in machine 
-              learning, computer vision, and web development.
-            </p>
-            <p className="text-lg text-gray-700 mb-4">
-              Our system combines state-of-the-art deep learning models with modern 
-              web technologies to create a practical, real-world application for automated 
-              detection and intelligent analysis.
-            </p>
-            <div className="grid md:grid-cols-3 gap-6 mt-8">
-              <div className="text-center p-4 bg-gradient-to-br from-green-50 to-green-100 rounded-lg border-2 border-green-200">
-                <svg className="w-12 h-12 mx-auto mb-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 14l9-5-9-5-9 5 9 5z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 14l9-5-9-5-9 5 9 5zm0 0l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14zm-4 6v-7.5l4-2.222" />
-                </svg>
-                <h3 className="font-bold text-lg mb-2 text-gray-800">Academic Excellence</h3>
-                <p className="text-sm text-gray-600">
-                  Built on cutting-edge research in deep learning
-                </p>
-              </div>
-              <div className="text-center p-4 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg border-2 border-blue-200">
-                <svg className="w-12 h-12 mx-auto mb-2 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-                <h3 className="font-bold text-lg mb-2 text-gray-800">Modern Tech Stack</h3>
-                <p className="text-sm text-gray-600">
-                  Leveraging React, FastAPI, and PyTorch
-                </p>
-              </div>
-              <div className="text-center p-4 bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg border-2 border-purple-200">
-                <svg className="w-12 h-12 mx-auto mb-2 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                <h3 className="font-bold text-lg mb-2 text-gray-800">Real-World Impact</h3>
-                <p className="text-sm text-gray-600">
-                  Practical applications in security and defense
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
         {/* Team Section */}
         <section className="max-w-6xl mx-auto mb-16">
           <h2 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent text-center mb-12">
@@ -170,58 +122,6 @@ export default function AboutPage() {
           </div>
         </section>
 
-        {/* Beneficiaries Section */}
-        <section className="max-w-4xl mx-auto mb-16">
-          <div className="professional-card rounded-2xl shadow-lg p-8">
-            <h2 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-6 text-center">
-              Project Beneficiaries
-            </h2>
-            <p className="text-lg text-gray-700 text-center mb-8">
-              This system is designed to benefit key defense and security organizations in Saudi Arabia
-            </p>
-          <div className="grid md:grid-cols-3 gap-8">
-            <div className="text-center p-6 bg-white rounded-lg shadow-md hover:shadow-xl transition">
-              <div className="flex items-center justify-center h-24 mb-4">
-                <img 
-                  src="/SAMI.webp" 
-                  alt="SAMI Logo" 
-                  className="max-h-20 max-w-full object-contain"
-                />
-              </div>
-              <h3 className="font-bold text-lg mb-2">SAMI</h3>
-              <p className="text-sm text-gray-600">
-                Saudi Arabian Military Industries - Advancing defense manufacturing capabilities
-              </p>
-            </div>
-            <div className="text-center p-6 bg-white rounded-lg shadow-md hover:shadow-xl transition">
-              <div className="flex items-center justify-center h-24 mb-4">
-                <img 
-                  src="/GAMI.webp" 
-                  alt="GAMI Logo" 
-                  className="max-h-20 max-w-full object-contain"
-                />
-              </div>
-              <h3 className="font-bold text-lg mb-2">GAMI</h3>
-              <p className="text-sm text-gray-600">
-                General Authority for Military Industries - Supporting defense sector development
-              </p>
-            </div>
-            <div className="text-center p-6 bg-white rounded-lg shadow-md hover:shadow-xl transition">
-              <div className="flex items-center justify-center h-24 mb-4">
-                <img 
-                  src="/SAFCSP.png" 
-                  alt="SAFCSP Logo" 
-                  className="max-h-20 max-w-full object-contain"
-                />
-              </div>
-              <h3 className="font-bold text-lg mb-2">SAFCSP</h3>
-              <p className="text-sm text-gray-600">
-                Saudi Federation for Cybersecurity, Programming and Drones
-              </p>
-            </div>
-            </div>
-          </div>
-        </section>
       </div>
     </div>
   )

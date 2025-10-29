@@ -122,19 +122,65 @@ export function generatePDF(report: Report) {
   yPosition += 10
 
   try {
-    // Original Image
-    doc.setFontSize(11)
-    doc.text('Original Image:', 20, yPosition)
-    yPosition += 5
-    
-    // Add original image (scaled to fit)
     const imgWidth = 80
     const imgHeight = 60
-    doc.addImage(report.images.original_base64, 'JPEG', 20, yPosition, imgWidth, imgHeight)
+    let imagesAdded = false
+    
+    // Original Image
+    if (report.images.original_base64 && report.images.original_base64.length > 0) {
+      doc.setFontSize(11)
+      doc.setTextColor(50, 50, 50)
+      doc.text('Original Image:', 20, yPosition)
+      yPosition += 5
+      
+      try {
+        // Detect image format from base64 string
+        const imageFormat = report.images.original_base64.includes('data:image/png') ? 'PNG' : 'JPEG'
+        console.log('Adding original image with format:', imageFormat)
+        doc.addImage(report.images.original_base64, imageFormat, 20, yPosition, imgWidth, imgHeight)
+        imagesAdded = true
+      } catch (imgError) {
+        console.error('Error adding original image:', imgError)
+        doc.setFontSize(9)
+        doc.setTextColor(200, 0, 0)
+        doc.text('Original image could not be loaded', 20, yPosition + 30)
+      }
+    } else {
+      doc.setFontSize(11)
+      doc.setTextColor(50, 50, 50)
+      doc.text('Original Image:', 20, yPosition)
+      yPosition += 5
+      doc.setFontSize(9)
+      doc.setTextColor(150, 150, 150)
+      doc.text('(Not available)', 20, yPosition + 30)
+    }
     
     // Segmented Image
-    doc.text('Segmented Result:', 110, yPosition - 5)
-    doc.addImage(report.images.masked_base64, 'JPEG', 110, yPosition, imgWidth, imgHeight)
+    if (report.images.masked_base64 && report.images.masked_base64.length > 0) {
+      doc.setFontSize(11)
+      doc.setTextColor(50, 50, 50)
+      doc.text('Segmented Result:', 110, imagesAdded ? yPosition - 5 : yPosition)
+      
+      try {
+        // Detect image format from base64 string
+        const imageFormat = report.images.masked_base64.includes('data:image/png') ? 'PNG' : 'JPEG'
+        console.log('Adding segmented image with format:', imageFormat)
+        doc.addImage(report.images.masked_base64, imageFormat, 110, imagesAdded ? yPosition : yPosition + 5, imgWidth, imgHeight)
+        imagesAdded = true
+      } catch (imgError) {
+        console.error('Error adding segmented image:', imgError)
+        doc.setFontSize(9)
+        doc.setTextColor(200, 0, 0)
+        doc.text('Segmented image could not be loaded', 110, (imagesAdded ? yPosition : yPosition + 5) + 30)
+      }
+    } else {
+      doc.setFontSize(11)
+      doc.setTextColor(50, 50, 50)
+      doc.text('Segmented Result:', 110, imagesAdded ? yPosition - 5 : yPosition)
+      doc.setFontSize(9)
+      doc.setTextColor(150, 150, 150)
+      doc.text('(Not available)', 110, (imagesAdded ? yPosition : yPosition + 5) + 30)
+    }
     
     yPosition += imgHeight + 15
   } catch (error) {

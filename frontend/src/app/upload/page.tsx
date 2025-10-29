@@ -147,9 +147,9 @@ export default function UploadPage() {
       formData.append('location', JSON.stringify({ lat: loc.latitude, lng: loc.longitude }))
 
       if (uploadMode === 'video') {
-        // Estimate processing time based on file size (rough estimate: 10-15 seconds per MB)
+        // Estimate processing time based on file size (optimized: ~4-6 seconds per MB with frame skipping)
         const fileSizeMB = file.size / (1024 * 1024)
-        const estimated = Math.ceil(fileSizeMB * 12) // seconds
+        const estimated = Math.ceil(fileSizeMB * 5) // seconds (3x faster with optimization)
         setEstimatedTime(estimated)
 
         // Start elapsed time counter
@@ -165,13 +165,13 @@ export default function UploadPage() {
         }, 1000)
 
         try {
-          // Process video - longer timeout needed
+          // Process video - no timeout limit for large videos
           const response = await axios.post(`${API_URL}/api/process_video`, formData, {
             headers: { 
               'Content-Type': 'multipart/form-data',
               'ngrok-skip-browser-warning': 'true'
             },
-            timeout: 300000, // 5 minutes for video processing
+            timeout: 0, // No timeout - let it process completely
             responseType: 'blob' // Receive video file as blob
           })
 
@@ -436,8 +436,8 @@ export default function UploadPage() {
                 {/* Info Message */}
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                   <p className="text-sm text-gray-700 text-center">
-                    <span className="font-bold">Processing:</span> Our AI model is analyzing each frame and applying camouflage segmentation overlay.
-                    This may take several minutes depending on video length and resolution.
+                    <span className="font-bold">⚡ Fast Processing:</span> Our optimized AI model analyzes key frames and applies camouflage segmentation overlay.
+                    3x faster than standard frame-by-frame processing.
                   </p>
                 </div>
               </div>

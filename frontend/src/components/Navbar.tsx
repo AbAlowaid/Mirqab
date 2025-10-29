@@ -17,15 +17,11 @@ export default function Navbar() {
         <div className="flex items-center justify-between h-20">
           {/* Logo Section */}
           <Link href="/" className="flex items-center space-x-3 group">
-            <div className="relative">
-              <div className="absolute inset-0 bg-blue-500 blur-md opacity-30 group-hover:opacity-50 transition-opacity"></div>
-              <div className="relative bg-gradient-to-br from-blue-600 to-blue-800 p-2 rounded-lg border-2 border-blue-400/30">
-                <svg className="w-8 h-8 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                </svg>
-              </div>
-            </div>
+            <img 
+              src="/Mirqab_white (1).png" 
+              alt="Mirqab Logo" 
+              className="h-12 object-contain group-hover:scale-105 transition-transform"
+            />
             <div>
               <div className="text-2xl font-bold tracking-wider text-white group-hover:text-blue-300 transition-colors">
                 Mirqab

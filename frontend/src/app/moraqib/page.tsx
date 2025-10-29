@@ -25,16 +25,26 @@ export default function MoraqibPage() {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Only set hydrated flag after component mounts on client
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
+
+  // Auto-scroll to bottom only when explicitly requested (not on initial load)
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (shouldAutoScroll) {
+      scrollToBottom();
+      setShouldAutoScroll(false);
+    }
+  }, [messages, shouldAutoScroll]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,6 +61,7 @@ export default function MoraqibPage() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
+    setShouldAutoScroll(true); // Enable auto-scroll for user messages
 
     try {
       const formData = new FormData();
@@ -75,6 +86,7 @@ export default function MoraqibPage() {
       };
 
       setMessages(prev => [...prev, assistantMessage]);
+      setShouldAutoScroll(true); // Enable auto-scroll for assistant response
     } catch (error) {
       console.error('Moraqib query error:', error);
       
@@ -86,17 +98,20 @@ export default function MoraqibPage() {
       };
 
       setMessages(prev => [...prev, errorMessage]);
+      setShouldAutoScroll(true); // Enable auto-scroll for error message
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Example questions
+  // Example questions - Updated to match RAG capabilities
   const exampleQuestions = [
-    "How many detections were recorded yesterday?",
-    "Show me reports from device Pi-001",
-    "What motion alerts occurred last night?",
-    "Count total detections this week"
+    "Give me a summary of the last report",
+    "What's the average number of soldiers in the last 10 reports?",
+    "What are all the devices used in the database?",
+    "How many detections were made yesterday?",
+    "Show me the last 5 reports",
+    "What environments were detected in the last week?"
   ];
 
   const askExample = (question: string) => {
@@ -163,10 +178,12 @@ export default function MoraqibPage() {
                     </div>
                   )}
 
-                  {/* Timestamp */}
-                  <p className="text-xs mt-2 opacity-60">
-                    {message.timestamp.toLocaleTimeString()}
-                  </p>
+                  {/* Timestamp - Only render on client after hydration */}
+                  {isHydrated && (
+                    <p className="text-xs mt-2 opacity-60">
+                      {message.timestamp.toLocaleTimeString()}
+                    </p>
+                  )}
                 </div>
               </div>
             ))}
@@ -237,9 +254,41 @@ export default function MoraqibPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <div className="text-sm text-gray-300">
-              <p className="font-semibold text-white mb-1">About Moraqib:</p>
-              <p>Moraqib is an AI assistant that answers questions <strong>exclusively</strong> based on detection reports stored in the Mirqab database. It cannot answer general knowledge questions or discuss topics outside detection reports.</p>
+              <p className="font-semibold text-white mb-2">About Moraqib RAG System:</p>
+              <p>
+                Moraqib uses advanced <strong>Retrieval-Augmented Generation (RAG)</strong> to intelligently query your detection reports database and provide accurate, context-aware answers.
+              </p>
             </div>
+          </div>
+        </div>
+
+        {/* Capability Cards */}
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 bg-gradient-to-br from-purple-900/30 to-blue-900/30 border border-purple-700/30 rounded-xl">
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="font-semibold text-white">Statistics</h3>
+            </div>
+            <p className="text-xs text-gray-400">
+              Get averages, totals, and counts from your detection data
+            </p>
+          </div>
+          
+          <div className="p-4 bg-gradient-to-br from-blue-900/30 to-cyan-900/30 border border-blue-700/30 rounded-xl">
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="font-semibold text-white">Smart Search</h3>
+            </div>
+            <p className="text-xs text-gray-400">
+              Find reports by time, device, environment, or any criteria
+            </p>
+          </div>
+          
+          <div className="p-4 bg-gradient-to-br from-cyan-900/30 to-teal-900/30 border border-cyan-700/30 rounded-xl">
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="font-semibold text-white">Summaries</h3>
+            </div>
+            <p className="text-xs text-gray-400">
+              Get natural language summaries of detection reports
+            </p>
           </div>
         </div>
       </div>

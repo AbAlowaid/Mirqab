@@ -3,9 +3,9 @@ Mirqab Backend - Main FastAPI Application
 Automatic AI Report Generation with Complete PDF Export Support
 """
 
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 import io
 import json
@@ -16,17 +16,26 @@ import numpy as np
 import cv2
 import tempfile
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# ✅ NEW: Load environment variables from project root (not from backend directory)
+root_dir = Path(__file__).parent.parent
+env_path = root_dir / '.env'
+print(f"Loading environment from: {env_path}")
+print(f".env exists: {env_path.exists()}")
+load_dotenv(dotenv_path=env_path)
+
+# Verify environment is loaded
+api_key = os.getenv('OPENAI_API_KEY')
+print(f"OpenAI API Key loaded: {bool(api_key)}")
 
 from model_handler import SegmentationModel
 from llm_handler import LLMReportGenerator
 from utils import detect_soldiers, encode_image_to_base64, overlay_mask_on_image
 from firestore_handler import firestore_handler
 from firebase_storage_handler import firebase_storage_handler
-from moraqib_rag import moraqib_rag
+from moraqib_rag import initialize_rag
 
 app = FastAPI(title="Mirqab API")
 
@@ -41,11 +50,16 @@ app.add_middleware(
 model = SegmentationModel()
 llm = LLMReportGenerator()
 
+# Initialize Moraqib RAG system
+moraqib_rag = None
+
 # API Key for Raspberry Pi authentication
 MIRQAB_API_KEY = os.getenv("MIRQAB_API_KEY", "development-key-change-in-production")
 
 @app.on_event("startup")
 async def startup_event():
+    global moraqib_rag
+    
     print("🚀 Starting Mirqab Backend...")
     model.load_model()
     
@@ -53,8 +67,13 @@ async def startup_event():
     if os.getenv("FIREBASE_CREDENTIALS_PATH"):
         firestore_handler.initialize()
         firebase_storage_handler.initialize()
+        
+        # Initialize Moraqib RAG system
+        moraqib_rag = initialize_rag(firestore_handler)
+        print("✅ Moraqib RAG system initialized")
     else:
         print("⚠️  Firebase credentials not configured - Pi reporting disabled")
+        print("⚠️  Moraqib RAG system disabled")
     
     print("✅ Ready for automatic AI report generation!")
 
@@ -63,7 +82,7 @@ async def health_check():
     return {
         "status": "healthy",
         "model_loaded": model.is_loaded(),
-        "gemini_api_available": llm.check_connection()
+        "openai_api_available": llm.check_connection()  # ✅ Changed from gemini_api_available
     }
 
 @app.post("/api/analyze_media")
@@ -536,11 +555,12 @@ async def report_detection(data: dict):
 @app.post("/api/process_video")
 async def process_video(file: UploadFile = File(...)):
     """
-    Process video file with frame-by-frame segmentation overlay.
+    Process video file with optimized frame-skipping segmentation overlay.
     Returns the processed video with red overlay on detected soldiers.
+    Faster processing by analyzing every 3rd frame.
     """
     try:
-        print("🎬 Starting video processing...")
+        print("🎬 Starting fast video processing...")
         
         # Save uploaded video to temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_input:
@@ -562,11 +582,16 @@ async def process_video(file: UploadFile = File(...)):
         
         print(f"📊 Video info: {width}x{height} @ {fps}fps, {total_frames} frames")
         
+        # ⚡ OPTIMIZATION: Process every 3rd frame for 3x speed
+        frame_skip = 3
+        print(f"⚡ Fast mode: Processing every {frame_skip} frames (3x faster)")
+        
         # Create video writer
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
         
         frame_count = 0
+        last_mask = None  # Cache last mask for skipped frames
         
         while cap.isOpened():
             ret, frame = cap.read()
@@ -576,15 +601,23 @@ async def process_video(file: UploadFile = File(...)):
             frame_count += 1
             
             try:
-                # Convert BGR to RGB for model
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_frame = Image.fromarray(frame_rgb)
-                
-                # Run segmentation (ignore instances for video processing)
-                mask, _ = model.predict(pil_frame)
-                
-                # Create overlay (will return original frame if mask is invalid)
-                overlay_pil = overlay_mask_on_image(pil_frame, mask, alpha=0.5)
+                # ⚡ OPTIMIZATION: Only process every Nth frame
+                if frame_count % frame_skip == 1 or last_mask is None:
+                    # Convert BGR to RGB for model
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_frame = Image.fromarray(frame_rgb)
+                    
+                    # Run segmentation (ignore instances for video processing)
+                    mask, _ = model.predict(pil_frame)
+                    last_mask = mask  # Cache for next frames
+                    
+                    # Create overlay
+                    overlay_pil = overlay_mask_on_image(pil_frame, last_mask, alpha=0.5)
+                else:
+                    # ⚡ Reuse last mask for skipped frames (much faster)
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_frame = Image.fromarray(frame_rgb)
+                    overlay_pil = overlay_mask_on_image(pil_frame, last_mask, alpha=0.5)
                 overlay_frame = np.array(overlay_pil)
                 
                 # Convert RGB back to BGR for video writer
@@ -638,7 +671,7 @@ async def moraqib_query(query: str = Form(...)):
     This endpoint implements Retrieval-Augmented Generation (RAG):
     1. Retrieves relevant detection reports from Firestore
     2. Augments context with report data
-    3. Generates natural language answer using Google Gemini
+    3. Generates natural language answer using OpenAI GPT-4 Turbo
     
     Strict Guardrails:
     - Only answers questions based on detection reports
@@ -684,6 +717,87 @@ async def moraqib_query(query: str = Form(...)):
             "answer": "I'm sorry, I encountered an error processing your question.",
             "error": str(e)
         }
+
+@app.get("/api/fetch-image-base64")
+async def fetch_image_base64(url: str):
+    """
+    Fetch an image from Firebase Storage URL and return as base64
+    This bypasses CORS issues when generating PDFs
+    """
+    try:
+        import requests
+        from urllib.parse import urlparse, unquote
+        
+        print(f"Fetching image from URL: {url}")
+        
+        # Check if it's a Firebase Storage URL
+        if 'storage.googleapis.com' in url or 'firebasestorage.googleapis.com' in url:
+            print("Detected Firebase Storage URL, using Firebase Admin SDK...")
+            
+            # Extract the file path from the URL
+            # URL format: https://storage.googleapis.com/bucket-name/path/to/file.jpg
+            parsed_url = urlparse(url)
+            path_parts = parsed_url.path.strip('/').split('/', 1)
+            
+            if len(path_parts) >= 2:
+                bucket_name = path_parts[0]
+                file_path = unquote(path_parts[1])
+                
+                print(f"Bucket: {bucket_name}, File path: {file_path}")
+                
+                # Use Firebase Admin SDK to download the file
+                from firebase_admin import storage
+                
+                bucket = storage.bucket(bucket_name)
+                blob = bucket.blob(file_path)
+                
+                # Download the image
+                image_bytes = blob.download_as_bytes()
+                
+                # Convert to base64
+                image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                
+                # Create data URL
+                data_url = f"data:image/jpeg;base64,{image_base64}"
+                
+                print(f"Successfully fetched image via Firebase SDK, size: {len(image_base64)} bytes")
+                
+                return JSONResponse(content={
+                    "success": True,
+                    "base64": data_url
+                })
+        
+        # Fallback to regular HTTP request for non-Firebase URLs
+        print("Using regular HTTP request...")
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        # Convert to base64
+        image_base64 = base64.b64encode(response.content).decode('utf-8')
+        
+        # Determine content type
+        content_type = response.headers.get('Content-Type', 'image/jpeg')
+        
+        # Create data URL
+        data_url = f"data:{content_type};base64,{image_base64}"
+        
+        print(f"Successfully fetched image, size: {len(image_base64)} bytes")
+        
+        return JSONResponse(content={
+            "success": True,
+            "base64": data_url
+        })
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching image: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=f"Failed to fetch image: {str(e)}")
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

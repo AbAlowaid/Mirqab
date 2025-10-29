@@ -1,466 +1,706 @@
 """
-Moraqib RAG Handler - Query detection reports using natural language
-RAG (Retrieval-Augmented Generation) system with strict guardrails
+Moraqib RAG System - Intelligent Retrieval-Augmented Generation
+Handles complex queries about detection reports with smart data retrieval
 """
 
 import os
-import re
-import requests
 import json
-import base64
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
-from firestore_handler import firestore_handler
+from openai import OpenAI
+import re
 
 # Load environment variables
 load_dotenv()
 
-# Import PromptLayer (optional - only if API key is set)
-try:
-    import promptlayer
-    PROMPTLAYER_AVAILABLE = True
-except ImportError:
-    PROMPTLAYER_AVAILABLE = False
-    print("⚠️  PromptLayer not installed. Install with: pip install promptlayer")
 
 class MoraqibRAG:
-    def __init__(self, api_key: str = None):
+    """
+    Advanced RAG system for querying detection reports
+    Features:
+    - Intent classification (summary, aggregation, filtering, general query)
+    - Smart temporal parsing (last report, yesterday, last week, etc.)
+    - Aggregation capabilities (average, count, list)
+    - Context-aware response generation
+    """
+    
+    def __init__(self, firestore_handler):
         """
-        Initialize Moraqib RAG assistant
+        Initialize Moraqib RAG system
         
         Args:
-            api_key: Google Gemini API key
+            firestore_handler: Instance of FirestoreHandler for database access
         """
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.firestore = firestore_handler
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        
         if not self.api_key:
-            raise ValueError("Gemini API key required for Moraqib")
-        
-        self.model_name = "gemini-2.5-flash"
-        self.api_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent"
-        
-        # Initialize PromptLayer if available
-        self.promptlayer_api_key = os.getenv("PROMPTLAYER_API_KEY")
-        self.use_promptlayer = PROMPTLAYER_AVAILABLE and self.promptlayer_api_key
-        
-        if self.use_promptlayer:
-            promptlayer.api_key = self.promptlayer_api_key
-            print("✅ PromptLayer integration enabled")
+            print("⚠️ Warning: OPENAI_API_KEY not found in environment")
+            self.client = None
         else:
-            print("⚠️  PromptLayer integration disabled (no API key or not installed)")
-        
-        # System instruction for strict guardrails
-        self.system_instruction = """You are 'Moraqib,' a specialized AI assistant for the 'Mirqab' camouflaged soldier detection system. Your one and only function is to answer questions based exclusively on the detection reports provided in the 'Context'.
-
-Your Rules:
-
-1. ANALYZE the provided 'Context' (which contains detection reports) to answer the user's 'Query'. Each report contains: timestamp, location, soldier count, environment description, attire/camouflage details, and equipment information.
-
-2. If the answer is in the Context, provide it clearly and concisely. You may summarize, count, or filter information from multiple reports based on the query.
-
-3. When users ask about specific topics (e.g., "woodland areas", "camouflage uniforms", "equipment"), search through ALL provided reports and extract relevant information even if the exact keywords don't match. Use semantic understanding:
-   - "woodland" relates to: forest, trees, vegetation, wooded areas
-   - "camouflage" relates to: uniform patterns, attire, clothing, gear
-   - "equipment" relates to: weapons, rifles, tactical gear, backpacks, helmets, vests
-
-4. If the Context contains reports but they don't match the specific query criteria (e.g., asking about "desert" when only "woodland" reports exist), clearly state: "Based on the available reports, I found X detections, but none match the specific criteria of [user's request]. The available reports show: [brief summary]."
-
-5. If the Context is completely empty or contains no relevant information, respond with: "I'm sorry, I can only provide information found in the Mirqab detection reports."
-
-6. You are forbidden from answering any general knowledge questions, engaging in chit-chat, or discussing any topic outside of the provided detection reports.
-
-7. When summarizing reports, always cite the report ID (e.g., "According to report MIR-20251024-0001...").
-
-8. If asked about counts, count the reports accurately and show your work (e.g., "Found 3 reports: MIR-001, MIR-002, MIR-003").
-
-9. If asked about time periods (e.g., "last night", "yesterday"), only use reports that fall within that time range based on their timestamps.
-
-10. Be helpful and informative - extract maximum value from the provided reports to answer the user's question."""
+            self.client = OpenAI(api_key=self.api_key)
+            print("✅ Moraqib RAG initialized with OpenAI")
     
-    def retrieve_relevant_reports(self, query: str, limit: int = 50) -> List[Dict]:
+    async def query(self, user_query: str) -> Dict:
         """
-        Retrieve relevant reports based on user query
+        Main query handler - orchestrates the RAG pipeline
         
         Args:
-            query: Natural language query
-            limit: Maximum number of reports to retrieve
+            user_query: Natural language question from user
         
         Returns:
-            list: Relevant detection reports
+            Dict with answer, metadata, and context
         """
-        try:
-            # Extract keywords and time filters from query
-            time_filter = self._extract_time_filter(query)
-            device_filter = self._extract_device_filter(query)
-            
-            print(f"🔍 Retrieving reports with filters:")
-            print(f"   Time: {time_filter}")
-            print(f"   Device: {device_filter}")
-            
-            # Query Firestore
-            if time_filter:
-                print(f"   Using time-filtered query...")
-                reports = firestore_handler.query_reports(
-                    start_date=time_filter.get('start'),
-                    end_date=time_filter.get('end'),
-                    device_id=device_filter,
-                    limit=limit
-                )
-            else:
-                # No time filter - check if it's a general query or specific search
-                query_lower = query.lower()
-                
-                # General queries that should return all/recent reports
-                general_keywords = [
-                    'all', 'total', 'count', 'how many', 'last report', 'latest', 
-                    'recent', 'show me', 'list', 'summary', 'overview', 'any detections',
-                    'what detections', 'show all', 'give me all'
-                ]
-                is_general_query = any(keyword in query_lower for keyword in general_keywords)
-                
-                # Also treat very short queries as general
-                if len(query.split()) <= 3 and not is_general_query:
-                    is_general_query = True
-                
-                if is_general_query:
-                    print(f"   Detected general query, getting recent reports...")
-                    reports = firestore_handler.query_reports(limit=limit)
-                else:
-                    # Specific search - try keyword search
-                    keywords = self._extract_keywords(query)
-                    print(f"   Keywords extracted: '{keywords}'")
-                    
-                    if keywords and len(keywords.strip()) > 2:
-                        print(f"   Using keyword search...")
-                        reports = firestore_handler.search_reports(keywords, limit=limit)
-                        
-                        # If keyword search returns no results, fallback to all reports
-                        if not reports:
-                            print(f"   No results from keyword search, getting all reports...")
-                            reports = firestore_handler.query_reports(limit=limit)
-                    else:
-                        # Fallback to recent reports
-                        print(f"   Getting recent reports (no specific keywords)...")
-                        reports = firestore_handler.query_reports(limit=limit)
-            
-            print(f"✅ Retrieved {len(reports)} relevant reports")
-            return reports
-            
-        except Exception as e:
-            print(f"❌ Error retrieving reports: {e}")
-            return []
-    
-    def _extract_time_filter(self, query: str) -> Optional[Dict]:
-        """Extract time range from query"""
-        query_lower = query.lower()
-        now = datetime.now()
+        print(f"\n{'='*60}")
+        print(f"🔍 Processing query: {user_query}")
+        print(f"{'='*60}")
         
-        # Only extract time if explicitly mentioned with specific keywords
-        # Be strict to avoid false positives
+        # Step 1: Understand the query intent
+        intent = self._classify_intent(user_query)
+        print(f"📊 Query intent: {intent['type']}")
         
-        # Last hour
-        if 'last hour' in query_lower or 'past hour' in query_lower or 'within the hour' in query_lower:
-            return {
-                'start': now - timedelta(hours=1),
-                'end': now
-            }
+        # Step 2: Extract temporal information
+        temporal_context = self._extract_temporal_context(user_query)
+        print(f"📅 Temporal context: {temporal_context}")
         
-        # Last 24 hours / today (but NOT if "yesterday" is also mentioned)
-        if ('last 24 hours' in query_lower or 
-            ('today' in query_lower and 'yesterday' not in query_lower) or 
-            'last day' in query_lower or
-            'past 24 hours' in query_lower):
-            return {
-                'start': now - timedelta(days=1),
-                'end': now
-            }
+        # Step 3: Retrieve relevant reports
+        reports = self._retrieve_reports(intent, temporal_context, user_query)
+        print(f"📚 Retrieved {len(reports)} reports")
         
-        # Yesterday - ONLY if explicitly asking about yesterday
-        if 'yesterday' in query_lower and ('how many' in query_lower or 'what' in query_lower or 'show' in query_lower or 'were' in query_lower):
-            yesterday_start = now.replace(hour=0, minute=0, second=0) - timedelta(days=1)
-            yesterday_end = yesterday_start + timedelta(days=1)
-            return {
-                'start': yesterday_start,
-                'end': yesterday_end
-            }
+        # Step 4: Generate response using LLM with retrieved context
+        answer = await self._generate_answer(user_query, reports, intent, temporal_context)
         
-        # Last week
-        if 'last week' in query_lower or 'past week' in query_lower or 'this week' in query_lower:
-            return {
-                'start': now - timedelta(weeks=1),
-                'end': now
-            }
+        # Extract report IDs used
+        report_ids = [r.get('report_id', 'Unknown') for r in reports]
         
-        # Last night (6 PM yesterday to 6 AM today)
-        if 'last night' in query_lower or 'tonight' in query_lower:
-            # 6 PM yesterday
-            night_start = now.replace(hour=18, minute=0, second=0) - timedelta(days=1)
-            # 6 AM today
-            night_end = now.replace(hour=6, minute=0, second=0)
-            return {
-                'start': night_start,
-                'end': night_end
-            }
-        
-        # If none of the above, return None (no time filter)
-        return None
-    
-    def _extract_device_filter(self, query: str) -> Optional[str]:
-        """Extract device ID from query"""
-        # Look for patterns like "Pi-001" or "device 001"
-        match = re.search(r'(Pi-\d{3}|device\s+\d{3})', query, re.IGNORECASE)
-        if match:
-            return match.group(1)
-        return None
-    
-    def _extract_keywords(self, query: str) -> str:
-        """
-        Extract meaningful keywords from query with domain-specific intelligence
-        
-        Args:
-            query: User's natural language query
-        
-        Returns:
-            str: Extracted keywords for search
-        """
-        query_lower = query.lower()
-        
-        # Domain-specific keyword mapping
-        keyword_mappings = {
-            # Environment terms
-            'woodland': 'woodland',
-            'forest': 'woodland',
-            'desert': 'desert',
-            'urban': 'urban',
-            'mountain': 'mountain',
-            'jungle': 'jungle',
-            'field': 'field',
-            'terrain': 'terrain',
-            
-            # Camouflage patterns
-            'camouflage': 'camouflage',
-            'camo': 'camouflage',
-            'uniform': 'camouflage',
-            'pattern': 'pattern',
-            'digital': 'digital',
-            'multicam': 'multicam',
-            'ghillie': 'ghillie',
-            
-            # Equipment terms
-            'equipment': 'equipment',
-            'weapon': 'weapon rifle',
-            'rifle': 'rifle',
-            'gear': 'gear',
-            'backpack': 'backpack',
-            'tactical': 'tactical',
-            'helmet': 'helmet',
-            'vest': 'vest',
+        return {
+            "success": True,
+            "question": user_query,
+            "answer": answer,
+            "reports_count": len(reports),
+            "reports_used": report_ids[:10],  # Limit to first 10 for display
+            "intent": intent['type']
         }
-        
-        # Extract mapped keywords
-        extracted_keywords = []
-        for term, mapped_value in keyword_mappings.items():
-            if term in query_lower:
-                extracted_keywords.append(mapped_value)
-        
-        # If we found domain-specific terms, return them
-        if extracted_keywords:
-            return ' '.join(extracted_keywords)
-        
-        # Otherwise, use basic stopword removal
-        stopwords = {
-            'what', 'when', 'where', 'who', 'how', 'many', 'is', 'are', 'was', 'were', 
-            'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
-            'tell', 'me', 'about', 'show', 'give', 'find', 'get', 'any', 'all',
-            'detected', 'detection', 'report', 'reports'
-        }
-        words = query_lower.split()
-        keywords = ' '.join([w for w in words if w not in stopwords and len(w) > 2])
-        return keywords
     
-    def augment_context(self, reports: List[Dict]) -> str:
+    def _classify_intent(self, query: str) -> Dict:
         """
-        Create context block from retrieved reports
+        Classify the user's query intent
         
-        Args:
-            reports: List of detection reports
-        
-        Returns:
-            str: Formatted context for LLM
-        """
-        if not reports:
-            return "No detection reports found."
-        
-        context_parts = []
-        context_parts.append(f"Detection Reports (Total: {len(reports)}):\n")
-        
-        for i, report in enumerate(reports, 1):
-            location = report.get('location', {})
-            lon = location.get('longitude', 0.0) if isinstance(location, dict) else 0.0
-            lat = location.get('latitude', 0.0) if isinstance(location, dict) else 0.0
-            
-            report_text = f"""
-Report #{i}:
-- Report ID: {report.get('report_id', 'N/A')}
-- Timestamp: {report.get('timestamp', 'N/A')}
-- Device: {report.get('source_device_id', 'N/A')}
-- Location: Latitude {lat:.6f}, Longitude {lon:.6f}
-- Soldier Count: {report.get('soldier_count', 0)}
-- Environment: {report.get('environment', 'Unknown')}
-- Attire & Camouflage: {report.get('attire_and_camouflage', 'Unknown')}
-- Equipment: {report.get('equipment', 'Unknown')}
-"""
-            context_parts.append(report_text)
-        
-        return '\n'.join(context_parts)
-    
-    async def generate_answer(self, query: str, context: str) -> str:
-        """
-        Generate answer using Gemini with strict guardrails
+        Types:
+        - summary: "Give me summary of...", "Describe...", "Tell me about..."
+        - aggregation: "How many...", "Average...", "Total...", "Count..."
+        - filtering: "Show reports from...", "List devices...", "Find..."
+        - latest: "Last report", "Most recent", "Latest..."
+        - general: General questions about data
         
         Args:
             query: User's question
-            context: Retrieved detection reports context
         
         Returns:
-            str: AI-generated answer
+            Dict with intent type and confidence
         """
-        try:
-            # Construct prompt with system instruction, context, and query
-            full_prompt = f"""{self.system_instruction}
-
-Context (Detection Reports):
-{context}
-
-User Query: {query}
-
-Answer:"""
-            
-            # Prepare request
-            payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text": full_prompt
-                            }
-                        ]
-                    }
-                ],
-                "generationConfig": {
-                    "temperature": 0.2,  # Low temperature for consistent, factual responses
-                    "maxOutputTokens": 1024,
-                    "topP": 0.95,
-                    "topK": 40
-                }
-            }
-            
-            # Send request
-            url = f"{self.api_endpoint}?key={self.api_key}"
-            
-            # Track start time for latency
-            start_time = datetime.now()
-            
-            response = requests.post(url, json=payload, timeout=30)
-            
-            # Calculate latency
-            latency_ms = (datetime.now() - start_time).total_seconds() * 1000
-            
-            if response.status_code == 200:
-                result = response.json()
-                
-                # Extract answer
-                answer = "I'm sorry, I couldn't generate a response."
-                if 'candidates' in result and len(result['candidates']) > 0:
-                    candidate = result['candidates'][0]
-                    if 'content' in candidate and 'parts' in candidate['content']:
-                        answer = candidate['content']['parts'][0]['text'].strip()
-                
-                # Log to PromptLayer if enabled
-                if self.use_promptlayer:
-                    try:
-                        promptlayer.track.prompt(
-                            function_name="moraqib_rag_query",
-                            provider="google",
-                            input_variables={
-                                "query": query,
-                                "context_length": len(context),
-                                "reports_count": context.count("Report #")
-                            },
-                            prompt_template=self.system_instruction,
-                            model=self.model_name,
-                            temperature=0.2,
-                            max_tokens=1024,
-                            prompt=full_prompt,
-                            response=answer,
-                            latency_ms=latency_ms,
-                            metadata={
-                                "system": "Mirqab",
-                                "component": "Moraqib RAG",
-                                "timestamp": datetime.now().isoformat()
-                            }
-                        )
-                        print(f"📊 Logged to PromptLayer (latency: {latency_ms:.2f}ms)")
-                    except Exception as pl_error:
-                        print(f"⚠️  PromptLayer logging failed: {pl_error}")
-                
-                return answer
-            else:
-                print(f"❌ Gemini API error: {response.status_code}")
-                print(f"   Response: {response.text}")
-                return "I'm sorry, I encountered an error processing your question."
+        query_lower = query.lower()
         
-        except Exception as e:
-            print(f"❌ Error generating answer: {e}")
-            return "I'm sorry, I encountered an error processing your question."
+        # Aggregation patterns
+        aggregation_keywords = [
+            'how many', 'count', 'total', 'average', 'avg', 'sum',
+            'number of', 'calculate', 'statistics', 'stat'
+        ]
+        
+        # Summary patterns
+        summary_keywords = [
+            'summary', 'summarize', 'describe', 'tell me about',
+            'what is', 'what was', 'explain', 'overview'
+        ]
+        
+        # Latest/Last patterns
+        latest_keywords = [
+            'last report', 'latest', 'most recent', 'newest',
+            'last detection', 'recent report'
+        ]
+        
+        # Filtering patterns
+        filtering_keywords = [
+            'show', 'list', 'find', 'search', 'get',
+            'from device', 'by device', 'where'
+        ]
+        
+        # Device-specific queries
+        device_keywords = [
+            'device', 'devices', 'pi-', 'raspberry', 'sensor'
+        ]
+        
+        # Check for aggregation
+        if any(kw in query_lower for kw in aggregation_keywords):
+            return {
+                'type': 'aggregation',
+                'confidence': 0.9
+            }
+        
+        # Check for latest/last
+        if any(kw in query_lower for kw in latest_keywords):
+            return {
+                'type': 'latest',
+                'confidence': 0.95
+            }
+        
+        # Check for summary
+        if any(kw in query_lower for kw in summary_keywords):
+            return {
+                'type': 'summary',
+                'confidence': 0.85
+            }
+        
+        # Check for device queries
+        if any(kw in query_lower for kw in device_keywords):
+            return {
+                'type': 'device_query',
+                'confidence': 0.9
+            }
+        
+        # Check for filtering
+        if any(kw in query_lower for kw in filtering_keywords):
+            return {
+                'type': 'filtering',
+                'confidence': 0.8
+            }
+        
+        # Default to general query
+        return {
+            'type': 'general',
+            'confidence': 0.5
+        }
     
-    async def query(self, user_question: str) -> Dict:
+    def _extract_temporal_context(self, query: str) -> Dict:
         """
-        Process user query through RAG pipeline
+        Extract time-related information from query
+        
+        Patterns:
+        - "last report" -> most recent 1
+        - "yesterday" -> reports from yesterday
+        - "last week" -> reports from last 7 days
+        - "last 10 reports" -> most recent 10
+        - "today" -> reports from today
+        - "13th report", "3rd report", "1st report" -> specific ordinal position
         
         Args:
-            user_question: Natural language question from user
+            query: User's question
         
         Returns:
-            dict: Response with answer and metadata
+            Dict with temporal filters
         """
-        try:
-            print(f"\n💬 Moraqib Query: {user_question}")
-            
-            # Step 1: Retrieve relevant reports
-            print("📚 Step 1: Retrieving relevant reports...")
-            reports = self.retrieve_relevant_reports(user_question, limit=50)
-            
-            # Step 2: Augment context
-            print("📝 Step 2: Creating context from reports...")
-            context = self.augment_context(reports)
-            
-            # Step 3: Generate answer
-            print("🤖 Step 3: Generating answer with Gemini...")
-            answer = await self.generate_answer(user_question, context)
-            
-            print(f"✅ Answer generated ({len(answer)} chars)")
-            
+        query_lower = query.lower()
+        now = datetime.now()
+        
+        # Check for ordinal numbers (1st, 2nd, 3rd, 13th, etc.)
+        # Matches: "1st report", "2nd report", "3rd report", "13th report", "13rd report" (typo)
+        ordinal_match = re.search(r'(\d+)(?:st|nd|rd|th) report', query_lower)
+        if ordinal_match:
+            n = int(ordinal_match.group(1))
             return {
-                "success": True,
-                "question": user_question,
-                "answer": answer,
-                "reports_count": len(reports),
-                "reports_used": [r.get('report_id', 'N/A') for r in reports[:10]]  # First 10 IDs
+                'type': 'ordinal',
+                'ordinal_position': n,
+                'limit': n,  # Get up to Nth report
+                'start_date': None,
+                'end_date': None
             }
+        
+        # Check for "last N reports"
+        last_n_match = re.search(r'last (\d+) reports?', query_lower)
+        if last_n_match:
+            n = int(last_n_match.group(1))
+            return {
+                'type': 'last_n',
+                'limit': n,
+                'start_date': None,
+                'end_date': None
+            }
+        
+        # Check for "last report" (singular)
+        if 'last report' in query_lower or 'latest report' in query_lower or 'most recent report' in query_lower:
+            return {
+                'type': 'last_n',
+                'limit': 1,
+                'start_date': None,
+                'end_date': None
+            }
+        
+        # Check for time ranges
+        if 'today' in query_lower:
+            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            return {
+                'type': 'date_range',
+                'limit': 1000,
+                'start_date': start_of_day,
+                'end_date': now
+            }
+        
+        if 'yesterday' in query_lower:
+            yesterday_start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            yesterday_end = yesterday_start + timedelta(days=1)
+            return {
+                'type': 'date_range',
+                'limit': 1000,
+                'start_date': yesterday_start,
+                'end_date': yesterday_end
+            }
+        
+        if 'last week' in query_lower or 'past week' in query_lower:
+            start_date = now - timedelta(days=7)
+            return {
+                'type': 'date_range',
+                'limit': 1000,
+                'start_date': start_date,
+                'end_date': now
+            }
+        
+        if 'last month' in query_lower or 'past month' in query_lower:
+            start_date = now - timedelta(days=30)
+            return {
+                'type': 'date_range',
+                'limit': 1000,
+                'start_date': start_date,
+                'end_date': now
+            }
+        
+        # Check for "last N days"
+        days_match = re.search(r'last (\d+) days?', query_lower)
+        if days_match:
+            n_days = int(days_match.group(1))
+            start_date = now - timedelta(days=n_days)
+            return {
+                'type': 'date_range',
+                'limit': 1000,
+                'start_date': start_date,
+                'end_date': now
+            }
+        
+        # Default: return recent reports
+        return {
+            'type': 'recent',
+            'limit': 100,
+            'start_date': None,
+            'end_date': None
+        }
+    
+    def _retrieve_reports(
+        self,
+        intent: Dict,
+        temporal_context: Dict,
+        query: str
+    ) -> List[Dict]:
+        """
+        Retrieve relevant reports from Firestore based on intent and context
+        
+        Args:
+            intent: Query intent classification
+            temporal_context: Temporal filters
+            query: Original user query
+        
+        Returns:
+            List of relevant report dictionaries
+        """
+        # Extract device filter if mentioned
+        device_id = self._extract_device_id(query)
+        
+        # Determine query parameters
+        limit = temporal_context.get('limit', 100)
+        start_date = temporal_context.get('start_date')
+        end_date = temporal_context.get('end_date')
+        
+        # For ordinal queries, sort ascending (oldest first) so 1st = oldest
+        # For other queries, sort descending (newest first)
+        is_ordinal = temporal_context.get('type') == 'ordinal'
+        order_by_desc = not is_ordinal  # Reverse for ordinal queries
+        
+        print(f"🔍 Querying Firestore:")
+        print(f"   Device: {device_id or 'All'}")
+        print(f"   Limit: {limit}")
+        print(f"   Order: {'Ascending (oldest first)' if not order_by_desc else 'Descending (newest first)'}")
+        print(f"   Date range: {start_date} to {end_date}")
+        
+        # Query Firestore
+        try:
+            if not self.firestore.db:
+                print("❌ Firestore not initialized")
+                return []
             
+            reports = self.firestore.query_reports(
+                start_date=start_date,
+                end_date=end_date,
+                device_id=device_id,
+                limit=limit,
+                order_by_desc=order_by_desc
+            )
+            
+            return reports
+        
         except Exception as e:
-            print(f"❌ Error in Moraqib query: {e}")
+            print(f"❌ Error retrieving reports: {e}")
             import traceback
             traceback.print_exc()
+            return []
+    
+    def _extract_device_id(self, query: str) -> Optional[str]:
+        """
+        Extract device ID from query if mentioned
+        
+        Args:
+            query: User's question
+        
+        Returns:
+            Device ID string or None
+        """
+        query_lower = query.lower()
+        
+        # Look for patterns like "Pi-001", "device Pi-001", "from Pi-001"
+        device_match = re.search(r'pi-\d{3}', query_lower, re.IGNORECASE)
+        if device_match:
+            return device_match.group(0).upper()
+        
+        # Look for "web upload" or "web-upload"
+        if 'web' in query_lower and ('upload' in query_lower or 'uploaded' in query_lower):
+            return "Web-Upload"
+        
+        return None
+    
+    async def _generate_answer(
+        self,
+        query: str,
+        reports: List[Dict],
+        intent: Dict,
+        temporal_context: Dict
+    ) -> str:
+        """
+        Generate natural language answer using OpenAI with retrieved context
+        
+        Args:
+            query: Original user question
+            reports: Retrieved reports from database
+            intent: Query intent classification
+            temporal_context: Temporal context
+        
+        Returns:
+            Natural language answer
+        """
+        if not self.client:
+            return self._generate_fallback_answer(query, reports, intent, temporal_context)
+        
+        # Handle empty results
+        if not reports:
+            return self._handle_no_results(query, temporal_context)
+        
+        # Special handling for ordinal queries (1st, 2nd, 13th report, etc.)
+        if temporal_context.get('type') == 'ordinal':
+            ordinal_pos = temporal_context.get('ordinal_position', 1)
+            if ordinal_pos <= len(reports):
+                # Get the specific report at ordinal position
+                target_report = reports[ordinal_pos - 1]  # Convert to 0-based index
+                
+                # Create focused context for this specific report
+                context = self._prepare_ordinal_context(target_report, ordinal_pos)
+            else:
+                return f"❌ Only {len(reports)} reports exist in the database. Cannot retrieve report #{ordinal_pos}."
+        else:
+            # Prepare context from reports
+            context = self._prepare_context(reports, intent)
+        
+        # Create system prompt
+        system_prompt = """You are Moraqib, an AI assistant specialized in analyzing military detection reports from the Mirqab system.
+
+Your role:
+- Answer questions ONLY based on the detection reports provided in the context
+- Be precise with numbers and statistics
+- Always cite report IDs when referencing specific reports
+- Format responses clearly with bullet points or structured text when appropriate
+- If the data doesn't contain the answer, say so clearly
+
+Detection Report Schema:
+- report_id: Unique identifier (e.g., MIR-20251027-0001)
+- timestamp: When the detection occurred
+- location: GPS coordinates (latitude, longitude)
+- soldier_count: Number of camouflaged soldiers detected
+- environment: Description of the environment (e.g., "dense woodland", "urban area")
+- attire_and_camouflage: Description of camouflage patterns
+- equipment: Visible equipment
+- source_device_id: Device that made the detection (e.g., "Pi-001", "Web-Upload")
+
+Guidelines:
+- Be concise but informative
+- Use markdown formatting for better readability
+- Present statistics clearly
+- Group related information together"""
+
+        # Create user prompt with context
+        if temporal_context and temporal_context.get('type') == 'ordinal':
+            ordinal_pos = temporal_context.get('ordinal_position', 1)
+            ordinal_suffix = 'th'
+            if ordinal_pos % 10 == 1 and ordinal_pos % 100 != 11:
+                ordinal_suffix = 'st'
+            elif ordinal_pos % 10 == 2 and ordinal_pos % 100 != 12:
+                ordinal_suffix = 'nd'
+            elif ordinal_pos % 10 == 3 and ordinal_pos % 100 != 13:
+                ordinal_suffix = 'rd'
             
-            return {
-                "success": False,
-                "question": user_question,
-                "answer": "I'm sorry, I encountered an error processing your question.",
-                "error": str(e)
-            }
+            user_prompt = f"""Question: {query}
+
+IMPORTANT: The user is asking about the {ordinal_pos}{ordinal_suffix} report in chronological order (sorted by timestamp, oldest first).
+This means: 1st report = the very first/oldest report, 2nd = second oldest, etc.
+Report position #{ordinal_pos} counting from the oldest.
+
+{context}
+
+Please provide a detailed summary of this specific report. Include all relevant details: report ID, timestamp, soldiers, environment, attire, equipment, device, and location."""
+        else:
+            user_prompt = f"""Question: {query}
+
+Context - Detection Reports ({len(reports)} reports, sorted newest first):
+{context}
+
+Please answer the question based on the detection reports above. Be specific and cite report IDs when relevant."""
+
+        try:
+            # Call OpenAI API
+            response = self.client.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=1000
+            )
+            
+            answer = response.choices[0].message.content
+            print(f"✅ Generated answer ({len(answer)} chars)")
+            
+            return answer
+        
+        except Exception as e:
+            print(f"❌ Error generating answer with OpenAI: {e}")
+            return self._generate_fallback_answer(query, reports, intent, temporal_context)
+    
+    def _prepare_ordinal_context(self, report: Dict, position: int) -> str:
+        """
+        Prepare context for a specific ordinal report (1st, 2nd, 13th, etc.)
+        
+        Args:
+            report: Single report dictionary
+            position: Ordinal position (1st, 2nd, 13th, etc.)
+        
+        Returns:
+            Formatted context string focused on this specific report
+        """
+        location = report.get('location', {})
+        
+        ordinal_suffix = 'th'
+        if position % 10 == 1 and position % 100 != 11:
+            ordinal_suffix = 'st'
+        elif position % 10 == 2 and position % 100 != 12:
+            ordinal_suffix = 'nd'
+        elif position % 10 == 3 and position % 100 != 13:
+            ordinal_suffix = 'rd'
+        
+        context = f"""This is the {position}{ordinal_suffix} report in the database (sorted by timestamp, oldest first):
+
+Report ID: {report.get('report_id', 'Unknown')}
+Position: #{position} (1st = oldest report, chronologically)
+Timestamp: {report.get('timestamp', 'Unknown')}
+Soldier Count: {report.get('soldier_count', 0)}
+Environment: {report.get('environment', 'Unknown')}
+Attire and Camouflage: {report.get('attire_and_camouflage', 'Unknown')}
+Equipment: {report.get('equipment', 'Unknown')}
+Source Device: {report.get('source_device_id', 'Unknown')}
+Location: ({location.get('latitude', 0)}, {location.get('longitude', 0)})
+"""
+        return context
+    
+    def _prepare_context(self, reports: List[Dict], intent: Dict) -> str:
+        """
+        Prepare context string from reports for LLM
+        
+        Args:
+            reports: List of report dictionaries
+            intent: Query intent
+        
+        Returns:
+            Formatted context string
+        """
+        context_parts = []
+        
+        # For aggregation queries, provide summary statistics first
+        if intent['type'] == 'aggregation':
+            stats = self._calculate_statistics(reports)
+            context_parts.append(f"Summary Statistics:")
+            context_parts.append(f"- Total Reports: {stats['total_reports']}")
+            context_parts.append(f"- Total Soldiers Detected: {stats['total_soldiers']}")
+            context_parts.append(f"- Average Soldiers per Report: {stats['avg_soldiers']:.2f}")
+            context_parts.append(f"- Unique Devices: {stats['unique_devices']}")
+            context_parts.append(f"- Devices List: {', '.join(stats['device_list'])}")
+            context_parts.append("\n")
+        
+        # Add individual reports (limit to 50 for context window)
+        context_parts.append("Individual Reports:")
+        for i, report in enumerate(reports[:50], 1):
+            location = report.get('location', {})
+            context_parts.append(f"\n{i}. Report: {report.get('report_id', 'Unknown')}")
+            context_parts.append(f"   Time: {report.get('timestamp', 'Unknown')}")
+            context_parts.append(f"   Soldiers: {report.get('soldier_count', 0)}")
+            context_parts.append(f"   Environment: {report.get('environment', 'Unknown')}")
+            context_parts.append(f"   Attire: {report.get('attire_and_camouflage', 'Unknown')}")
+            context_parts.append(f"   Equipment: {report.get('equipment', 'Unknown')}")
+            context_parts.append(f"   Device: {report.get('source_device_id', 'Unknown')}")
+            context_parts.append(f"   Location: ({location.get('latitude', 0)}, {location.get('longitude', 0)})")
+        
+        if len(reports) > 50:
+            context_parts.append(f"\n... and {len(reports) - 50} more reports")
+        
+        return "\n".join(context_parts)
+    
+    def _calculate_statistics(self, reports: List[Dict]) -> Dict:
+        """
+        Calculate statistics from reports
+        
+        Args:
+            reports: List of report dictionaries
+        
+        Returns:
+            Dictionary of statistics
+        """
+        total_soldiers = sum(r.get('soldier_count', 0) for r in reports)
+        devices = set(r.get('source_device_id', 'Unknown') for r in reports)
+        
+        return {
+            'total_reports': len(reports),
+            'total_soldiers': total_soldiers,
+            'avg_soldiers': total_soldiers / len(reports) if reports else 0,
+            'unique_devices': len(devices),
+            'device_list': sorted(list(devices))
+        }
+    
+    def _generate_fallback_answer(
+        self,
+        query: str,
+        reports: List[Dict],
+        intent: Dict,
+        temporal_context: Dict = None
+    ) -> str:
+        """
+        Generate answer without LLM (fallback mode)
+        
+        Args:
+            query: User's question
+            reports: Retrieved reports
+            intent: Query intent
+            temporal_context: Temporal context (optional)
+        
+        Returns:
+            Basic formatted answer
+        """
+        if not reports:
+            return "No reports found matching your query."
+        
+        # Handle ordinal queries
+        if temporal_context and temporal_context.get('type') == 'ordinal':
+            ordinal_pos = temporal_context.get('ordinal_position', 1)
+            if ordinal_pos <= len(reports):
+                report = reports[ordinal_pos - 1]
+                location = report.get('location', {})
+                
+                ordinal_suffix = 'th'
+                if ordinal_pos % 10 == 1 and ordinal_pos % 100 != 11:
+                    ordinal_suffix = 'st'
+                elif ordinal_pos % 10 == 2 and ordinal_pos % 100 != 12:
+                    ordinal_suffix = 'nd'
+                elif ordinal_pos % 10 == 3 and ordinal_pos % 100 != 13:
+                    ordinal_suffix = 'rd'
+                
+                return f"""Here is the {ordinal_pos}{ordinal_suffix} report (chronologically, oldest first):
+
+Report: {report.get('report_id', 'Unknown')}
+Time: {report.get('timestamp', 'Unknown')}
+Soldiers: {report.get('soldier_count', 0)}
+Environment: {report.get('environment', 'Unknown')}
+Attire: {report.get('attire_and_camouflage', 'Unknown')}
+Equipment: {report.get('equipment', 'Unknown')}
+Device: {report.get('source_device_id', 'Unknown')}
+Location: ({location.get('latitude', 0)}, {location.get('longitude', 0)})
+
+(LLM unavailable - showing basic report details)"""
+            else:
+                return f"❌ Only {len(reports)} reports exist. Cannot retrieve report #{ordinal_pos}."
+        
+        # Calculate basic statistics
+        stats = self._calculate_statistics(reports)
+        
+        # Generate response based on intent
+        if intent['type'] == 'aggregation':
+            return f"""Based on {stats['total_reports']} reports:
+- Total soldiers detected: {stats['total_soldiers']}
+- Average soldiers per report: {stats['avg_soldiers']:.2f}
+- Devices used: {', '.join(stats['device_list'])}
+
+(LLM unavailable - showing basic statistics)"""
+        
+        elif intent['type'] == 'latest':
+            report = reports[0]
+            location = report.get('location', {})
+            return f"""Latest Report: {report.get('report_id', 'Unknown')}
+- Time: {report.get('timestamp', 'Unknown')}
+- Soldiers detected: {report.get('soldier_count', 0)}
+- Environment: {report.get('environment', 'Unknown')}
+- Attire: {report.get('attire_and_camouflage', 'Unknown')}
+- Device: {report.get('source_device_id', 'Unknown')}
+- Location: ({location.get('latitude', 0)}, {location.get('longitude', 0)})"""
+        
+        else:
+            # General response
+            report_ids = [r.get('report_id', 'Unknown') for r in reports[:5]]
+            return f"""Found {len(reports)} reports matching your query.
+
+Recent reports: {', '.join(report_ids)}
+
+(LLM unavailable - showing report list only)"""
+    
+    def _handle_no_results(self, query: str, temporal_context: Dict) -> str:
+        """
+        Handle case when no reports are found
+        
+        Args:
+            query: User's question
+            temporal_context: Temporal filters used
+        
+        Returns:
+            Helpful message
+        """
+        time_desc = ""
+        if temporal_context['type'] == 'last_n':
+            time_desc = f"the last {temporal_context['limit']} reports"
+        elif temporal_context['type'] == 'date_range':
+            if temporal_context['start_date']:
+                time_desc = f"between {temporal_context['start_date'].strftime('%Y-%m-%d')} and {temporal_context['end_date'].strftime('%Y-%m-%d')}"
+        
+        return f"""No detection reports found {time_desc}.
+
+This could mean:
+- No detections have been recorded yet
+- The time range specified has no data
+- The device filter doesn't match any reports
+
+Try:
+- Asking about "all reports" or "all detections"
+- Expanding your time range
+- Checking if the database has been populated with detection data"""
 
 
 # Global instance
-moraqib_rag = MoraqibRAG()
+moraqib_rag = None
+
+
+def initialize_rag(firestore_handler):
+    """Initialize the global RAG instance"""
+    global moraqib_rag
+    moraqib_rag = MoraqibRAG(firestore_handler)
+    return moraqib_rag
+

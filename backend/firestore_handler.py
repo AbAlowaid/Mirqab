@@ -48,7 +48,24 @@ class FirestoreHandler:
             credentials_path: Path to Firebase service account JSON file
                             Defaults to FIREBASE_CREDENTIALS_PATH env variable
         """
-        self.credentials_path = credentials_path or os.getenv("FIREBASE_CREDENTIALS_PATH")
+        # Get path from env or parameter
+        env_path = os.getenv("FIREBASE_CREDENTIALS_PATH")
+        
+        # Resolve path relative to project root if needed
+        if env_path:
+            # If path is relative, make it relative to project root
+            if not os.path.isabs(env_path):
+                from pathlib import Path
+                root_dir = Path(__file__).parent.parent
+                if not credentials_path:
+                    credentials_path = root_dir / env_path
+            else:
+                from pathlib import Path
+                if not credentials_path:
+                    credentials_path = Path(env_path)
+        
+        # Store as string for compatibility
+        self.credentials_path = str(credentials_path) if credentials_path else None
         self.db = None
         self._initialized = False
         
@@ -205,7 +222,8 @@ class FirestoreHandler:
         start_date: datetime = None,
         end_date: datetime = None,
         device_id: str = None,
-        limit: int = 100
+        limit: int = 100,
+        order_by_desc: bool = True  # ✅ NEW: Control sort direction
     ) -> List[Dict]:
         """
         Query detection reports with filters
@@ -215,6 +233,7 @@ class FirestoreHandler:
             end_date: Filter reports before this date
             device_id: Filter by source device
             limit: Maximum number of results
+            order_by_desc: If True, sort by timestamp descending (newest first)
         
         Returns:
             list: List of report dictionaries
@@ -224,22 +243,25 @@ class FirestoreHandler:
             
             # Apply filters
             if device_id:
+                print(f"🔍 Filtering by device_id: '{device_id}'")
                 query = query.where(filter=FieldFilter('source_device_id', '==', device_id))
             
-            if start_date:
+            # Only apply date filters if they are not None
+            if start_date is not None:
+                print(f"📅 Start date filter: {start_date}")
                 query = query.where(filter=FieldFilter('timestamp', '>=', start_date))
-            
-            if end_date:
-                query = query.where(filter=FieldFilter('timestamp', '<=', end_date))
-            
-            # Only order by timestamp if we have filters (otherwise Firestore may need an index)
-            # For simple queries, we'll sort in memory
-            if device_id or start_date or end_date:
-                # With filters, just limit
-                query = query.limit(limit)
             else:
-                # No filters - can safely order
-                query = query.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
+                print("📅 No start date filter - searching all time")
+            
+            if end_date is not None:
+                print(f"📅 End date filter: {end_date}")
+                query = query.where(filter=FieldFilter('timestamp', '<=', end_date))
+            else:
+                print("📅 No end date filter - searching all time")
+            
+            # ✅ ALWAYS sort by timestamp to get newest first
+            direction = firestore.Query.DESCENDING if order_by_desc else firestore.Query.ASCENDING
+            query = query.order_by('timestamp', direction=direction).limit(limit)
             
             # Execute query
             docs = query.stream()
@@ -252,7 +274,14 @@ class FirestoreHandler:
                     report['timestamp'] = report['timestamp'].isoformat()
                 reports.append(report)
             
-            print(f"✅ Retrieved {len(reports)} reports")
+            # ✅ Additional safety: Sort in memory by timestamp if needed
+            if reports and order_by_desc:
+                try:
+                    reports.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+                except:
+                    pass
+            
+            print(f"✅ Retrieved {len(reports)} reports (sorted newest first)")
             return reports
             
         except Exception as e:
