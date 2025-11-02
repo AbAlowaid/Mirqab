@@ -4,10 +4,22 @@
 .env.production
 .env.staging
 *.env
+!.env.example
+!.env_template
+
+# API Keys (never commit these!)
+*api_key*
+*API_KEY*
+*secret*
+*SECRET*
 
 # Firebase credentials
 *-firebase-adminsdk-*.json
 firebase-adminsdk-*.json
+firebase-config.json
+
+# PromptLayer API keys
+.promptlayer
 
 # Python
 __pycache__/

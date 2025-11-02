@@ -35,7 +35,7 @@ class SegmentationModel:
             print(f"   Model path: {self.model_path}")
             
             # Create DeepLabV3 model with ResNet-101 backbone (model was trained with ResNet-101)
-            self.model = torchvision.models.segmentation.deeplabv3_resnet101(pretrained=False)
+            self.model = torchvision.models.segmentation.deeplabv3_resnet101(weights=None)
             
             # Modify classifier to match number of classes
             self.model.classifier[4] = torch.nn.Conv2d(256, self.num_classes, kernel_size=1)
@@ -47,7 +47,14 @@ class SegmentationModel:
             # Load trained weights
             if self.model_path.exists():
                 # PyTorch 2.6+ requires weights_only=False for checkpoints with numpy objects
-                checkpoint = torch.load(str(self.model_path), map_location=self.device, weights_only=False)
+                try:
+                    checkpoint = torch.load(str(self.model_path), map_location=self.device, weights_only=False)
+                except Exception as load_error:
+                    # Fallback: Add safe globals for numpy if needed
+                    print(f"   Retrying with numpy safe globals...")
+                    import numpy as np
+                    torch.serialization.add_safe_globals([np.core.multiarray.scalar])
+                    checkpoint = torch.load(str(self.model_path), map_location=self.device, weights_only=False)
                 
                 # Handle different checkpoint formats
                 if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:

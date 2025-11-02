@@ -76,14 +76,21 @@ class RealTimeDetector:
             print(f"📦 Loading model from: {self.model_path}")
             print(f"   Device: {self.device.upper()}")
             
-            # Initialize DeepLabV3 model
-            self.model = torchvision.models.segmentation.deeplabv3_resnet101(pretrained=False)
+            # Initialize DeepLabV3 model (use weights parameter instead of pretrained)
+            self.model = torchvision.models.segmentation.deeplabv3_resnet101(weights=None)
             
             # Adjust classifier for 2 classes (background + camouflage)
             self.model.classifier[4] = torch.nn.Conv2d(256, 2, kernel_size=1)
             
-            # Load weights
-            checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=False)
+            # Load weights with safe globals for numpy compatibility
+            try:
+                checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=False)
+            except Exception as load_error:
+                # Fallback: Add safe globals for numpy if needed
+                print(f"   Retrying with numpy safe globals...")
+                import numpy as np
+                torch.serialization.add_safe_globals([np.core.multiarray.scalar])
+                checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=False)
             
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
                 self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)

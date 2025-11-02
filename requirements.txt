@@ -16,14 +16,21 @@ firebase-admin>=6.2.0
 # PromptLayer for RAG evaluation
 promptlayer==0.3.5
 
+# OpenAI for LLM/Vision API
+openai>=1.0.0
+
 # Utilities
 requests==2.31.0
 python-dotenv==1.0.0
 pydantic==2.5.3
 pyyaml>=5.1
+jinja2>=3.1.0
 
 # CORS
 fastapi-cors==0.0.6
+
+# Flask (for Raspberry Pi server)
+flask>=3.0.0
 
 # Image processing
 imageio==2.33.1

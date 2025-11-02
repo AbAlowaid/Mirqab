@@ -13,8 +13,14 @@ def setup_environment():
     """Set up environment variables for evaluation"""
     print("🔧 Setting up environment...")
     
-    # Set PromptLayer API key
-    os.environ["PROMPTLAYER_API_KEY"] = "pl_5a6ca0f6691aba14d471d2bbb45f9ace"
+    # Load environment variables from .env file
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    # Check if PROMPTLAYER_API_KEY is set
+    if not os.getenv("PROMPTLAYER_API_KEY"):
+        print("⚠️ Warning: PROMPTLAYER_API_KEY not found in environment")
+        print("   Please set it in your .env file or environment variables")
     
     # Add current directory to Python path
     current_dir = Path(__file__).parent

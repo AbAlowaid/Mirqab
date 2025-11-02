@@ -14,8 +14,10 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Set PromptLayer API key
-os.environ["PROMPTLAYER_API_KEY"] = "pl_5a6ca0f6691aba14d471d2bbb45f9ace"
+# Check if PROMPTLAYER_API_KEY is set
+if not os.getenv("PROMPTLAYER_API_KEY"):
+    print("⚠️ Warning: PROMPTLAYER_API_KEY not found in environment")
+    print("   Please set it in your .env file or environment variables")
 
 from moraqib_rag import MoraqibRAG
 from firestore_handler import firestore_handler

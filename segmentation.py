@@ -124,10 +124,15 @@ def init_gpu():
     cuda_available = torch.cuda.is_available()
     print(f"CUDA Available: {cuda_available}")
     
+    # Display PyTorch build info
+    print(f"PyTorch Version: {torch.__version__}")
+    print(f"PyTorch CUDA Version: {torch.version.cuda if torch.version.cuda else 'Not available (CPU-only build)'}")
+    
     if cuda_available:
         print(f"GPU Device Count: {torch.cuda.device_count()}")
         print(f"Current GPU: {torch.cuda.get_device_name(0)}")
         print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        print(f"CUDA Capability: {torch.cuda.get_device_capability(0)}")
         
         # Optimize cuDNN
         torch.backends.cudnn.benchmark = True
@@ -137,7 +142,16 @@ def init_gpu():
         print(f"✅ Using GPU: {torch.cuda.get_device_name(0)}")
     else:
         device = torch.device("cpu")
-        print("⚠️  GPU not available, using CPU (slower)")
+        print("⚠️  GPU not available or disabled, using CPU (slower)")
+        print("\n💡 To enable GPU acceleration:")
+        print("   1. Check if you have an NVIDIA GPU:")
+        print("      Run: nvidia-smi")
+        print("   2. Install CUDA-enabled PyTorch:")
+        print("      Visit: https://pytorch.org/get-started/locally/")
+        print("      Example (CUDA 11.8):")
+        print("      pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu118")
+        print("   3. Or for CUDA 12.1:")
+        print("      pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121")
     
     print("=" * 70)
     return device
@@ -176,14 +190,22 @@ class CustomSemanticSegmentation:
             print(f"   Device: {self.device.type.upper()}")
             print(f"   Mixed Precision (FP16): {self.use_mixed_precision}")
             
-            # Initialize DeepLabV3 model
-            self.model = torchvision.models.segmentation.deeplabv3_resnet101(pretrained=False)
+            # Initialize DeepLabV3 model (use weights parameter instead of pretrained)
+            self.model = torchvision.models.segmentation.deeplabv3_resnet101(weights=None)
             
             # Adjust classifier for 2 classes (background + camouflage)
             self.model.classifier[4] = torch.nn.Conv2d(256, 2, kernel_size=1)
             
-            # Load weights
-            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+            # Load weights with safe globals for numpy compatibility
+            print(f"   Loading checkpoint...")
+            try:
+                checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+            except Exception as load_error:
+                # Fallback: Add safe globals for numpy if needed
+                print(f"   Retrying with numpy safe globals...")
+                import numpy as np
+                torch.serialization.add_safe_globals([np.core.multiarray.scalar])
+                checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
             
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
                 self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
